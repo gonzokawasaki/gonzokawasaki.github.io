@@ -1,0 +1,315 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Op-Tree Prototype 3 — Resolver + Chips</title>
+    <style>
+      /* ---- Lumina Precision palette (offline: system font fallback for Inter) ---- */
+      :root {
+        --surface: #f8f9fa; --bright: #f8f9fa; --lowest: #ffffff;
+        --c-low: #f3f4f5; --c: #edeeef; --c-high: #e7e8e9;
+        --on: #191c1d; --on-var: #424754; --outline: #727785; --outline-v: #c2c6d6;
+        --primary: #0058be; --primary-c: #2170e4; --primary-fixed: #d8e2ff; --on-primary: #fff;
+        --error: #ba1a1a;
+        --mono: "JetBrains Mono", ui-monospace, Menlo, monospace;
+        --sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+        --top: 48px; --rail: 56px; --side: 280px; --status: 24px;
+      }
+      * { box-sizing: border-box; }
+      html, body { margin: 0; height: 100vh; overflow: hidden; font-family: var(--sans); color: var(--on); background: var(--surface); font-size: 14px; }
+      button { font-family: inherit; cursor: pointer; }
+
+      /* ---- Top menu bar ---- */
+      #topbar {
+        position: fixed; top: 0; left: 0; right: 0; height: var(--top); z-index: 50;
+        display: flex; align-items: center; gap: 18px; padding: 0 12px;
+        background: var(--surface); border-bottom: 1px solid var(--outline-v);
+      }
+      .brand { color: var(--primary); font-weight: 700; font-size: 16px; letter-spacing: -0.01em; white-space: nowrap; }
+      #menu { display: flex; align-items: center; gap: 2px; }
+      #menu button { height: 32px; padding: 0 8px; border: 0; background: transparent; color: var(--on-var); font-size: 12px; font-weight: 500; border-radius: 3px; }
+      #menu button:hover { background: var(--c-high); }
+      #menu button.active { color: var(--primary); box-shadow: inset 0 -2px 0 var(--primary); border-radius: 0; }
+      .spacer { flex: 1 1 auto; }
+      /* center view group */
+      #viewgroup { display: flex; align-items: center; gap: 2px; background: var(--c-low); padding: 4px; border-radius: 6px; }
+      #viewgroup button { height: 24px; padding: 0 9px; border: 0; background: transparent; color: var(--on-var); font-size: 11px; font-weight: 600; border-radius: 4px; }
+      #viewgroup button:hover { background: var(--c-high); }
+      #topicons { display: flex; gap: 4px; }
+      #topicons button { width: 32px; height: 32px; border: 0; background: transparent; color: var(--on-var); border-radius: 999px; font-size: 15px; }
+      #topicons button:hover { background: var(--c-high); }
+
+      /* ---- Left tool rail ---- */
+      #rail {
+        position: fixed; left: 0; top: var(--top); bottom: var(--status); width: var(--rail); z-index: 40;
+        display: flex; flex-direction: column; align-items: center; padding: 12px 0; gap: 6px;
+        background: var(--bright); border-right: 1px solid var(--outline-v);
+      }
+      #rail button {
+        width: 40px; height: 40px; display: flex; align-items: center; justify-content: center;
+        border: 0; background: transparent; color: var(--on-var); border-radius: 6px; font-size: 17px;
+      }
+      #rail button:hover { background: var(--c-low); }
+      #rail button.on { background: var(--primary-fixed); color: var(--primary); }
+      #rail button:disabled { opacity: 0.35; cursor: default; }
+      #rail .sep { width: 28px; height: 1px; background: var(--outline-v); margin: 3px 0; }
+      #rail .grow { flex: 1 1 auto; }
+
+      /* ---- Viewport ---- */
+      #stage { position: fixed; top: var(--top); left: var(--rail); right: var(--side); bottom: var(--status); background: var(--lowest); overflow: hidden; }
+      #renderCanvas { width: 100%; height: 100%; display: block; outline: none; touch-action: none; }
+
+      /* ---- floating AI window (bevelled, over bottom-left → middle of viewport) ---- */
+      #aiwindow {
+        position: absolute; left: 16px; bottom: 16px; z-index: 20;
+        width: clamp(340px, 46%, 600px);
+        display: flex; flex-direction: column;
+        background: rgba(248,249,250,0.92);
+        backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+        border: 1px solid var(--outline-v); border-radius: 10px; overflow: hidden;
+        box-shadow:
+          inset 1.5px 1.5px 0 rgba(255,255,255,0.95),
+          inset -1.5px -1.5px 0 rgba(0,0,0,0.07),
+          0 1px 0 rgba(255,255,255,0.6),
+          0 12px 32px rgba(0,0,0,0.16);
+      }
+      .ai-head { display: flex; align-items: center; justify-content: space-between; padding: 7px 10px; background: rgba(255,255,255,0.55); border-bottom: 1px solid var(--outline-v); }
+      .ai-head .t { display: flex; align-items: center; gap: 7px; font-size: 11px; font-weight: 600; letter-spacing: 0.05em; text-transform: uppercase; color: var(--on-var); }
+      .ai-head .badge { background: var(--primary-fixed); color: var(--primary); font-size: 9.5px; font-weight: 700; padding: 1px 6px; border-radius: 999px; text-transform: none; letter-spacing: 0.02em; }
+      .ai-undo { width: 26px; height: 26px; border: 1px solid var(--outline-v); background: var(--lowest); color: var(--on-var); border-radius: 6px; font-size: 13px; }
+      .ai-undo:hover { background: var(--c-low); }
+      #conversation { padding: 8px 10px; min-height: 34px; max-height: 30vh; overflow-y: auto; }
+      .ai-examples { display: flex; flex-wrap: wrap; gap: 4px; margin: 0; padding: 0 10px 8px; }
+      .ai-examples button { font-size: 11px; padding: 3px 7px; border-radius: 3px; border: 1px solid var(--outline-v); background: var(--lowest); color: var(--on-var); }
+      .ai-examples button:hover { background: var(--c-low); }
+      /* paste-bridge: the simple, login-free AI path */
+      .ai-bridge { display: flex; gap: 6px; padding: 0 10px 8px; }
+      .ai-bridge .btn { flex: 1 1 auto; justify-content: center; text-align: center; }
+      .bridge-cta { margin-top: 8px; }
+      #bridgePanel { padding: 8px 10px 10px; border-top: 1px solid var(--outline-v); background: rgba(255,255,255,0.55); }
+      #bridgeStep { font-size: 11px; color: var(--on-var); margin-bottom: 6px; line-height: 1.4; }
+      #bridgePanel textarea { width: 100%; resize: vertical; background: var(--lowest); color: #1f3a63; border: 1px solid var(--outline-v); border-radius: 6px; padding: 7px 9px; font-size: 11px; line-height: 1.45; font-family: var(--mono); }
+      #bridgePrompt { margin-bottom: 6px; }
+      .ai-inputrow { display: flex; gap: 8px; align-items: stretch; padding: 7px 10px 9px; border-top: 1px solid var(--outline-v); background: rgba(255,255,255,0.45); }
+      textarea#cmd {
+        flex: 1 1 auto; resize: none; min-height: 44px;
+        background: var(--lowest); color: #1f3a63; border: 1px solid var(--outline-v); border-radius: 6px;
+        padding: 8px 10px; font-size: 14px; line-height: 18px; font-family: var(--sans);
+      }
+      textarea#cmd:focus { outline: none; border-color: var(--primary); box-shadow: 0 0 0 2px rgba(0,88,190,0.12); }
+      .ai-send { flex: 0 0 auto; width: 46px; border: 0; border-radius: 8px; background: var(--primary); color: #fff; font-size: 18px; }
+      .ai-send:hover { background: var(--primary-c); }
+
+      /* ---- Right inspector (280px) ---- */
+      #inspector {
+        position: fixed; right: 0; top: var(--top); bottom: var(--status); width: var(--side); z-index: 40;
+        display: flex; flex-direction: column; background: var(--bright); border-left: 1px solid var(--outline-v);
+      }
+      .insp-head { padding: 10px 12px; border-bottom: 1px solid var(--outline-v); display: flex; align-items: center; gap: 10px; }
+      .insp-head .ic { width: 34px; height: 34px; border-radius: 4px; background: var(--primary-fixed); color: var(--primary); display: flex; align-items: center; justify-content: center; font-size: 17px; flex: 0 0 auto; }
+      .insp-head h1 { font-size: 12px; font-weight: 600; margin: 0; }
+      .insp-head .sub { font-size: 11px; color: var(--on-var); margin-top: 1px; }
+      .insp-scroll { flex: 1 1 auto; overflow-y: auto; }
+
+      /* command block */
+      .cmdblock { padding: 12px; border-bottom: 1px solid var(--outline-v); }
+      input[type="text"] { width: 100%; background: var(--lowest); color: #1f3a63; border: 1px solid var(--outline-v); border-radius: 4px; padding: 7px 9px; font-size: 13px; font-family: var(--mono); }
+      input[type="text"]:focus { outline: none; border-color: var(--primary); }
+      .btnrow { display: flex; gap: 6px; margin-top: 6px; }
+      .btn { padding: 6px 10px; font-size: 12px; font-weight: 500; border-radius: 4px; border: 1px solid var(--outline-v); background: var(--lowest); color: var(--on-var); }
+      .btn:hover { background: var(--c-low); }
+      .btn.primary { background: var(--primary); border-color: var(--primary); color: var(--on-primary); flex: 1 1 auto; }
+      .btn.primary:hover { background: var(--primary-c); }
+      .examples { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 8px; }
+      .examples button { font-size: 11px; padding: 3px 7px; border-radius: 3px; border: 1px solid var(--outline-v); background: var(--lowest); color: var(--on-var); }
+      .examples button:hover { background: var(--c-low); }
+      #cmdlog { font-family: var(--mono); font-size: 11px; color: var(--on-var); margin-top: 8px; min-height: 14px; }
+
+      /* accordions */
+      .acc { border-bottom: 1px solid var(--outline-v); }
+      .acc-head { width: 100%; padding: 7px 12px; display: flex; align-items: center; justify-content: space-between; background: var(--c-low); border: 0; }
+      .acc-head span { font-size: 11px; font-weight: 600; letter-spacing: 0.05em; text-transform: uppercase; color: var(--on-var); }
+      .acc-head .chev { font-size: 12px; color: var(--outline); transition: transform 0.15s; }
+      .acc.collapsed .chev { transform: rotate(-90deg); }
+      .acc-body { padding: 10px 12px; }
+      .acc.collapsed .acc-body { display: none; }
+
+      /* scene hierarchy */
+      #treeList { display: flex; flex-direction: column; gap: 2px; }
+      .treeItem { padding: 4px 8px; border-radius: 3px; cursor: pointer; font-size: 12px; font-family: var(--mono); color: var(--on-var); display: flex; align-items: center; gap: 6px; }
+      .treeItem:hover { background: var(--c-low); }
+      .treeItem.sel { background: rgba(0,88,190,0.10); color: var(--primary); }
+
+      /* op-tree json (hidden from students; dev/test hook only) */
+      #json { background: var(--lowest); border: 1px solid var(--outline-v); border-radius: 4px; padding: 7px; font-family: var(--mono); font-size: 10px; line-height: 1.45; white-space: pre; overflow: auto; max-height: 200px; color: #4a5260; }
+
+      /* shape library (predefined shapes + brushes browser, blocked out) */
+      .lib-sub { font-size: 11px; color: var(--on-var); line-height: 1.4; margin-bottom: 9px; }
+      .shapegrid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+      .shapetile {
+        aspect-ratio: 1 / 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px;
+        background: var(--lowest); border: 1px solid var(--outline-v); border-radius: 6px; color: var(--on-var); cursor: pointer;
+      }
+      .shapetile:hover { background: var(--c-low); border-color: var(--outline); }
+      .shapetile.brush { border-style: dashed; border-color: var(--primary-c); }
+      .shapetile .glyph { font-size: 22px; line-height: 1; }
+      .shapetile .nm { font-size: 9.5px; letter-spacing: 0.02em; color: var(--on-var); }
+      .lib-create { width: 100%; margin-top: 8px; justify-content: center; text-align: center; }
+
+      /* ---- chips ---- */
+      .chiprow { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; }
+      .verbpill { background: var(--primary); color: #fff; font-size: 12px; font-weight: 600; padding: 3px 9px; border-radius: 4px; font-family: var(--mono); }
+      .chip { display: inline-flex; align-items: center; gap: 5px; background: var(--lowest); border: 1px solid var(--outline-v); border-radius: 4px; padding: 3px 7px; }
+      .chip > label { font-size: 10px; color: var(--on-var); text-transform: uppercase; letter-spacing: 0.04em; }
+      .chip select { background: var(--c-low); color: #1f3a63; border: 1px solid var(--outline-v); border-radius: 3px; padding: 1px 3px; font-size: 12px; font-family: var(--mono); }
+      .chip input[type="range"] { width: 78px; accent-color: var(--primary); }
+      .chip .chipval { font-size: 12px; color: #1f3a63; font-family: var(--mono); min-width: 30px; text-align: right; }
+      .chip .suggest { display: inline-flex; gap: 3px; }
+      .chip .suggest button { padding: 0 5px; font-size: 11px; background: var(--primary-fixed); border: 0; color: var(--primary); border-radius: 3px; }
+      .chipsummary { font-size: 11px; color: var(--on-var); margin-top: 7px; }
+      .sub { font-size: 11px; color: var(--on-var); line-height: 1.4; }
+      .escalate { display: flex; align-items: baseline; gap: 7px; background: #fff7ec; border: 1px solid #f0dcb4; border-radius: 4px; padding: 7px 9px; }
+      .esctag { font-size: 11px; font-weight: 600; color: #b07b1f; white-space: nowrap; }
+      .escmsg { font-size: 11px; color: #6a5a3a; line-height: 1.4; }
+
+      /* ---- status bar ---- */
+      #statusbar {
+        position: fixed; bottom: 0; left: 0; right: 0; height: var(--status); z-index: 50;
+        display: flex; align-items: center; justify-content: space-between; padding: 0 12px;
+        background: var(--c); border-top: 1px solid var(--outline-v);
+        font-family: var(--mono); font-size: 10px; color: var(--on-var);
+      }
+      #statusbar .grp { display: flex; align-items: center; gap: 14px; }
+      .dot { width: 7px; height: 7px; border-radius: 999px; background: #2ea043; display: inline-block; margin-right: 5px; }
+    </style>
+  </head>
+  <body>
+    <!-- Top menu bar -->
+    <header id="topbar">
+      <div class="brand">🧊 OptreeCAD</div>
+      <nav id="menu">
+        <button class="active">Edit</button>
+        <button>View</button>
+        <button>Select</button>
+        <button>Help</button>
+      </nav>
+      <div class="spacer"></div>
+      <div id="viewgroup">
+        <button data-view="home">⌂ Home</button>
+        <button data-view="front">Front</button>
+        <button data-view="top">Top</button>
+        <button data-view="right">Right</button>
+        <button data-view="iso">Iso</button>
+      </div>
+      <div class="spacer"></div>
+      <div id="topicons">
+        <button title="Settings (decorative)">⚙</button>
+        <button title="Help (decorative)">?</button>
+      </div>
+    </header>
+
+    <!-- Left tool rail -->
+    <aside id="rail">
+      <button data-mode="select" title="Select">⌖</button>
+      <button data-mode="move" class="on" title="Move">✥</button>
+      <button data-mode="rotate" title="Rotate">⟳</button>
+      <button data-mode="scale" title="Scale">⤢</button>
+      <div class="sep"></div>
+      <button disabled title="Brushes (later prototype)">❖</button>
+      <button disabled title="Sketch (later prototype)">✎</button>
+      <div class="grow"></div>
+      <button disabled title="Layers (later)">▦</button>
+      <button disabled title="History (later)">↺</button>
+    </aside>
+
+    <!-- Viewport -->
+    <main id="stage">
+      <canvas id="renderCanvas"></canvas>
+
+      <!-- Floating AI window (input + conversation) -->
+      <div id="aiwindow">
+        <div class="ai-head">
+          <div class="t">✦ AI Assistant <span class="badge">local · offline</span></div>
+          <button class="ai-undo" id="undoBtn" title="Undo last action">↩</button>
+        </div>
+        <div id="conversation">
+          <div id="chips"><div class="sub">Tell me what to build — I resolve it to editable chips.</div></div>
+          <div id="cmdlog"></div>
+        </div>
+        <div class="ai-examples">
+          <button data-ex="add a red cube 24">add a red cube</button>
+          <button data-ex="spawn a rabbit">spawn a rabbit</button>
+          <button data-ex="move the green cube up 8">move the green cube up</button>
+          <button data-ex="cut a hole r=4">cut a hole r=4</button>
+          <button data-ex="rotate 45 y">rotate 45 y</button>
+          <button data-ex="build a snowman next to a rocket">snowman + rocket (AI)</button>
+        </div>
+        <!-- paste-bridge: ask whatever AI the student already has, no key/login -->
+        <div class="ai-bridge">
+          <button class="btn" id="aiCopyPrompt" title="Build a prompt from the scene + your request">📋 Ask my AI</button>
+          <button class="btn" id="aiPasteReply" title="Paste your AI's reply to run it">📥 Paste AI reply</button>
+        </div>
+        <div id="bridgePanel" hidden>
+          <div id="bridgeStep"></div>
+          <textarea id="bridgePrompt" rows="5" readonly placeholder="(prompt for your AI appears here)"></textarea>
+          <textarea id="bridgeReply" rows="3" placeholder="Paste your AI's reply here, then Apply…"></textarea>
+          <div class="btnrow">
+            <button class="btn primary" id="applyReply">Apply reply</button>
+            <button class="btn" id="bridgeClose">Close</button>
+          </div>
+        </div>
+        <div class="ai-inputrow">
+          <textarea id="cmd" rows="2" placeholder="Tell the AI what to build…  e.g. spawn a rabbit · move the green cube up&#10;Enter to send · Shift+Enter = new line"></textarea>
+          <button class="ai-send" id="runCmd" title="Resolve (Enter)">➤</button>
+        </div>
+      </div>
+    </main>
+
+    <!-- Right inspector -->
+    <aside id="inspector">
+      <div class="insp-head">
+        <div class="ic">◧</div>
+        <div>
+          <h1>Properties</h1>
+          <div class="sub" id="selTitle">nothing selected</div>
+        </div>
+      </div>
+
+      <div class="insp-scroll">
+        <!-- Shape library: a browser of predefined shapes + brushes (blocked out;
+             tiles are placeholders for now). "Create brush" stamps the current
+             selection in as a new predefined shape. -->
+        <div class="acc" data-acc>
+          <button class="acc-head"><span>Shape Library</span><span class="chev">⌄</span></button>
+          <div class="acc-body">
+            <div class="lib-sub">Predefined shapes & ready-made objects — click a tile to place it</div>
+            <div id="shapeGrid" class="shapegrid"></div>
+            <button class="btn lib-create" id="makeBrush">＋ Create brush from selection</button>
+          </div>
+        </div>
+        <div class="acc" data-acc>
+          <button class="acc-head"><span>Scene Objects</span><span class="chev">⌄</span></button>
+          <div class="acc-body"><div id="treeList"></div></div>
+        </div>
+        <!-- Op-tree kept as the source of truth + dev/test hook, but hidden from
+             students (too technical). renderJSON() still updates it. -->
+        <div id="json" hidden></div>
+      </div>
+    </aside>
+
+    <!-- Status bar -->
+    <footer id="statusbar">
+      <div class="grp">
+        <span><span class="dot"></span>Engine Ready</span>
+        <span id="fps">FPS —</span>
+      </div>
+      <div class="grp">
+        <span id="objcount">Objects: 0</span>
+        <span>Grid: 10mm</span>
+      </div>
+    </footer>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
